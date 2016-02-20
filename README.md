@@ -8,33 +8,32 @@ Features:
   * Files are converted to JPEG format.
   * Compression rate is changable.
     * (highly compressed) 0 --> 100 (not much compressed)
-    * Defaults to 75 (compressed but not visually noticable).
-  * Change image dimensions.
-    * This value is the largest allowed dimension for the images.
-    * 0 = unlimited / no change.
-    * Defaults to 0.
-  * Leaves other kind of blobs untouched
-  * Returns the same values as blobstore.ParseUploads()
-
+  * Resize to a maximum size in either dimension.
+    * 0 = (default) unlimited / no change.
+  * Returns a []byte of the compressed image.
 
 Usage
 -----
-  ```go
-    import "github.com/tomihiltunen/gae-go-image-optimizer"
-    
-    func urlPathHandler(w http.ResponseWriter, r *http.Request) {
-      // Create options
-      o := optimg.NewCompressionOptions(r)
+ ```go
+import "github.com/chadbohannan/gaeresize"
 
-      // Set max size
-      o.Size = 1600
+func blobstoreUploadHandler(w http.ResponseWriter, r *http.Request) {
+	c := appengine.NewContext(r)
 
-      // Set quality
-      o.quality = 75
+	blobs, formData, _ := blobstore.ParseUpload(r)
+	
+	// assume the blob is jpeg unless the client specified with a form field
+	mimeType := "image/jpeg"
+	if info := formData["MimeType"]; len(info) > 0 {
+		mimeType = info[0]
+	}
 
-      // Get the automatically optimized blobs and other values
-      blobs, other, err := optimg.ParseBlobs(o)
+	// read the blobkey out of the parsed upload
+	blobKey, _ := gaeresize.ReadBlobKey(blobs)
 
-      ...
-    }
-  ```
+	// compress the blob
+	params := gaeresize.NewParams(mimeType, 45, 100)
+	imgBytes, _ := gaeresize.CompressBlob(c, blobKey, params)
+	...
+}
+```
