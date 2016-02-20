@@ -10,25 +10,30 @@ Features:
     * (highly compressed) 0 --> 100 (not much compressed)
   * Resize to a maximum size in either dimension.
     * 0 = (default) unlimited / no change.
-  * Returns a key to a new blobstore entity.
+  * Returns a []byte of the compressed image.
 
 Usage
 -----
-  ```go
-    import "github.com/chadbohannan/gae-go-image-optimizer"
-    
-    func blobstoreUploadHandler(w http.ResponseWriter, r *http.Request) {
-      c := appengine.NewContext(r)
+ ```go
+import "github.com/chadbohannan/gaeresize"
 
-      // Get the original file
-	  blobKey := gaeresize.ProcessRequest(r, nil)
+func blobstoreUploadHandler(w http.ResponseWriter, r *http.Request) {
+	c := appengine.NewContext(r)
 
-      // Create options, quality = 75, size = 1600
-      o := optimg.NewDefaultOptions(c, 75, 1600)
+	blobs, formData, _ := blobstore.ParseUpload(r)
+	
+	// assume the blob is jpeg unless the client specified with a form field
+	mimeType := "image/jpeg"
+	if info := formData["MimeType"]; len(info) > 0 {
+		mimeType = info[0]
+	}
 
-      // Get an optimized blob key
-      compressedBlobKey := gaeresize.ProcessRequest(r, o)
+	// read the blobkey out of the parsed upload
+	blobKey, _ := gaeresize.ReadBlobKey(blobs)
 
-      ...
-    }
-  ```
+	// compress the blob
+	params := gaeresize.NewParams(mimeType, 45, 100)
+	imgBytes, _ := gaeresize.CompressBlob(c, blobKey, params)
+	...
+}
+```

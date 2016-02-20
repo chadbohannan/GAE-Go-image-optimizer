@@ -1,7 +1,7 @@
 /***************************************************************
 *
 *   GAE Go automatic blob image optimizer
-*   
+*
 *   Created by Tomi Hiltunen 2013.
 *   http://www.linkedin.com/in/tomihiltunen
 *
@@ -19,21 +19,22 @@
 *           - Reduces download times.
 *
 *   Adulterated use:
-*       - Forked the lib to transform into simple, nondestructive library call
+*       - Forked the lib to refactor into a nondestructive library call
+*       - Compressed artifacts are small enough to store in datastore
+*       - Artifacts in datastore can most easily be served securly
 ***************************************************************/
 package gaeresize
 
 import (
 	"appengine"
 	"appengine/blobstore"
+	"bytes"
 	"errors"
 	"image"
 	_ "image/gif"
 	"image/jpeg"
 	_ "image/png"
 	"math"
-	"net/http"
-	"net/url"
 	"strings"
 )
 
@@ -47,109 +48,78 @@ var (
 	}
 )
 
-type Options struct {
-	Quality int // The quality of the JPEG output (0-100)
-	Size    int // Maximum dimension (width/height) for the photo
-	Context appengine.Context // AppEngine context    
+type Params struct {
+	MimeType string
+	Quality  int // The quality of the JPEG output (0-100)
+	Size     int // Maximum dimension (width/height) for the photo
 }
 
-func NewDefaultOptions(c appengine.Context) *Options {
-	return &Options{
-		Context: c,
-		Quality: 75, // 75 is highly compressed but not visually noticable.
-		Size:    0,  // 0 = do not resize, otherwise this is the maximum dimension
+func NewDefaultOptions(mimeType string) *Params {
+	return &Params{
+		MimeType: mimeType, // required to be in the set of supported types
+		Quality:  75,       // 75 is highly compressed but not visually noticable.
+		Size:     0,        // 0 = do not resize, otherwise this is the maximum dimension
 	}
 }
 
-func NewOptions(c appengine.Context, quality, size, int) *Options {
-	return &Options{
-		Context: c,
-		Quality: quality,
-		Size:    size,
+func NewParams(mimeType string, quality, size int) *Params {
+	return &Params{
+		MimeType: mimeType,
+		Quality:  quality,
+		Size:     size,
 	}
 }
 
-// r       - a request from the appengine/blobstore upload service callback
-// options - compression resize options. nil to return the original blob key
-// returns - struct url.Values map[string][]string, error
-func ProcessRequest(r *http.Request, options *Options) (string, error) {
-	blobs, values, err = blobstore.ParseUpload(r)
-	
-	// read the file metadata from the blobstore
-	file := blobs["file"]
-	if len(file) == 0 {
+// utility function to get a blobkey from the mess that blobstore parses out
+func ReadBlobKey(blobs map[string][]*blobstore.BlobInfo) (appengine.BlobKey, error) {
+	// read the file metadata from the blobs
+	if file := blobs["file"]; len(file) == 0 {
 		return "", errors.New("Missing file data.")
+	} else {
+		return file[0].BlobKey, nil
 	}
-	blobKey := file[0].BlobKey
-	if options == nil {
-		return blobKey
-	}
-	mimeType := strings.ToLower(blob.ContentType)
-	return ProcessBlob(blobKey, mimeType, options)
 }
 
-
-// - Only supported image types will be processed. Others will be returned as-is.
-// - Resizes the image if necessary.
-// - Writes the new compressed JPEG to blobstore.
-// - Deletes the old blob and substitutes the old BlobInfo with the new one.
-func ProcessBlob(blobKey, mimeType string, options *Options) (string, error) {
+// - Reads a blobstore key, writes to a cloud storage bucket file.
+// - Returns a []byte of a JPEG or a non-nil error
+func CompressBlob(c appengine.Context, blobKey appengine.BlobKey, params *Params) ([]byte, error) {
 	// Check that the blob is of supported mime-type
-	if !allowedMimeTypes[strings.ToLower(mimeType)] {
-		return "", errors.New("Unsupported mime-type.")
+	if !allowedMimeTypes[strings.ToLower(params.MimeType)] {
+		return nil, errors.New("Unsupported mime-type:" + params.MimeType)
 	}
+
 	// Instantiate blobstore reader
-	reader := blobstore.NewReader(options.Context, blobKey)
-	
+	reader := blobstore.NewReader(c, blobKey)
+
 	// Instantiate the image object
 	img, _, err := image.Decode(reader)
 	if err != nil {
-		return
+		return nil, err
 	}
-	// Resize if necessary
-	// Maintain aspect ratio!
-	if options.Size > 0 && (img.Bounds().Max.X > options.Size || img.Bounds().Max.Y > options.Size) {
+	// Resize if necessary an maintain aspect ratio
+	if params.Size > 0 && (img.Bounds().Max.X > params.Size || img.Bounds().Max.Y > params.Size) {
 		size_x := img.Bounds().Max.X
 		size_y := img.Bounds().Max.Y
-		if size_x > options.Size {
+		if size_x > params.Size {
 			size_x_before := size_x
-			size_x = options.Size
+			size_x = params.Size
 			size_y = int(math.Floor(float64(size_y) * float64(float64(size_x)/float64(size_x_before))))
 		}
-		if size_y > options.Size {
+		if size_y > params.Size {
 			size_y_before := size_y
-			size_y = options.Size
+			size_y = params.Size
 			size_x = int(math.Floor(float64(size_x) * float64(float64(size_y)/float64(size_y_before))))
 		}
-		img = resize.Resize(img, img.Bounds(), size_x, size_y)
+		img = Resize(img, img.Bounds(), size_x, size_y)
 	}
-	// JPEG options
-	o := &jpeg.Options{
-		Quality: options.Quality,
+
+	// Write JPEG to buffer
+	b := new(bytes.Buffer)
+	o := &jpeg.Options{Quality: params.Quality}
+	if err := jpeg.Encode(b, img, o); err != nil {
+		return nil, err
 	}
-	// Open writer
-	writer, err := blobstore.Create(options.Context, "image/jpeg")
-	if err != nil {
-		return "", err
-	}
-	// Write to blobstore
-	if err := jpeg.Encode(writer, img, o); err != nil {
-		_ = writer.Close()
-		return "", err
-	}
-	// Close writer
-	if err := writer.Close(); err != nil {
-		return "", err
-	}
-	// Get key
-	newKey, err := writer.Key()
-	if err != nil {
-		return "", err
-	}
-	// Get new BlobInfo
-	newBlobInfo, err := blobstore.Stat(options.Context, newKey)
-	if err != nil {
-		return "", err
-	}
-	return newBlobInfo.BlobKey, nil
+
+	// Return image content
+	return b.Bytes(), nil
 }
