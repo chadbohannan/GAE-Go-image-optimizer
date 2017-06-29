@@ -26,8 +26,6 @@
 package gaeresize
 
 import (
-	"appengine"
-	"appengine/blobstore"
 	"bytes"
 	"errors"
 	"image"
@@ -36,6 +34,10 @@ import (
 	_ "image/png"
 	"math"
 	"strings"
+
+	"golang.org/x/net/context"
+	"google.golang.org/appengine"
+	"google.golang.org/appengine/blobstore"
 )
 
 //  Allowed mime-types; should be the ones supported by Go image package.
@@ -82,7 +84,7 @@ func ReadBlobKey(blobs map[string][]*blobstore.BlobInfo) (appengine.BlobKey, err
 
 // - Reads a blobstore key, writes to a cloud storage bucket file.
 // - Returns a []byte of a JPEG or a non-nil error
-func CompressBlob(c appengine.Context, blobKey appengine.BlobKey, params *Params) ([]byte, error) {
+func CompressBlob(c context.Context, blobKey appengine.BlobKey, params *Params) ([]byte, error) {
 	// Check that the blob is of supported mime-type
 	if !allowedMimeTypes[strings.ToLower(params.MimeType)] {
 		return nil, errors.New("Unsupported mime-type:" + params.MimeType)
